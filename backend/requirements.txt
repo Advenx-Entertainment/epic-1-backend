@@ -1,0 +1,9 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+paho-mqtt==1.6.1
+asyncpg==0.29.0
+python-socketio==5.11.2
+PyJWT==2.9.0
+SQLAlchemy==2.0.32
+python-jose==3.3.0
+passlib[bcrypt]==1.7.4
