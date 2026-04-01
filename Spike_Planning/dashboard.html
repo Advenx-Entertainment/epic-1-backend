@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spike Planning — Test Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 24px; min-height: 100vh; }
+  h1 { font-size: 18px; font-weight: 500; margin-bottom: 24px; color: #fff; letter-spacing: 0.05em; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .card { background: #1a1a1a; border: 0.5px solid #333; border-radius: 12px; padding: 16px; }
+  .card h2 { font-size: 11px; font-weight: 500; color: #666; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+
+  /* State display */
+  .state-badge {
+    font-size: 28px; font-weight: 600; letter-spacing: 0.04em;
+    padding: 12px 20px; border-radius: 8px; display: inline-block;
+    transition: all 0.3s ease;
+  }
+  .state-IDLE     { background: #1e2a1e; color: #4caf50; border: 1px solid #2d4a2d; }
+  .state-PLANTING { background: #2a2a1e; color: #ffc107; border: 1px solid #4a401e; }
+  .state-ACTIVE   { background: #2a1e1e; color: #f44336; border: 1px solid #4a2020; }
+  .state-DEFUSING { background: #1e1e2a; color: #2196f3; border: 1px solid #20204a; }
+  .state-ENDED    { background: #2a1e2a; color: #9c27b0; border: 1px solid #3a2040; }
+  .state-UNKNOWN  { background: #222; color: #666; border: 1px solid #333; }
+
+  /* Timers */
+  .timer-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 0.5px solid #222; }
+  .timer-row:last-child { border-bottom: none; }
+  .timer-name { font-size: 13px; color: #999; }
+  .timer-val { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; color: #fff; }
+  .timer-val.urgent { color: #f44336; }
+  .no-timers { font-size: 13px; color: #444; padding: 8px 0; }
+
+  /* Buttons */
+  .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button {
+    background: #222; border: 0.5px solid #444; border-radius: 8px;
+    color: #ccc; font-size: 13px; padding: 10px 14px; cursor: pointer;
+    transition: all 0.15s; text-align: left; font-family: inherit;
+  }
+  button:hover { background: #2a2a2a; border-color: #666; color: #fff; }
+  button:active { transform: scale(0.97); }
+  button.danger { border-color: #4a2020; color: #f44336; }
+  button.danger:hover { background: #2a1e1e; }
+  button.primary { border-color: #2d4a2d; color: #4caf50; }
+  button.primary:hover { background: #1e2a1e; }
+
+  /* Event log */
+  #log { height: 180px; overflow-y: auto; font-size: 12px; font-family: monospace; }
+  .log-entry { padding: 4px 0; border-bottom: 0.5px solid #1a1a1a; color: #888; }
+  .log-entry .time { color: #444; margin-right: 8px; }
+  .log-entry .evt { color: #4caf50; }
+  .log-entry .state { color: #ffc107; }
+  .log-entry.error { color: #f44336; }
+
+  /* Connection */
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .conn-dot.connected { background: #4caf50; box-shadow: 0 0 6px #4caf5088; }
+  .conn-dot.disconnected { background: #f44336; }
+  .conn-label { font-size: 12px; color: #666; }
+
+  /* Status bar */
+  .statusbar { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+
+  /* Full width card */
+  .full { grid-column: 1 / -1; }
+
+  /* Custom event */
+  .custom-row { display: flex; gap: 8px; margin-top: 8px; }
+  .custom-row input {
+    flex: 1; background: #111; border: 0.5px solid #333; border-radius: 8px;
+    color: #ccc; font-size: 13px; padding: 10px 12px; font-family: monospace; outline: none;
+  }
+  .custom-row input:focus { border-color: #555; }
+  .custom-row button { flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<h1>Spike Planning — Test Dashboard</h1>
+
+<div class="statusbar">
+  <span class="conn-dot disconnected" id="wsDot"></span>
+  <span class="conn-label" id="wsLabel">Connecting to ws://localhost:8000/ws…</span>
+</div>
+
+<div class="grid">
+
+  <!-- State -->
+  <div class="card">
+    <h2>Current state</h2>
+    <span class="state-badge state-UNKNOWN" id="stateBadge">—</span>
+  </div>
+
+  <!-- Timers -->
+  <div class="card">
+    <h2>Active timers</h2>
+    <div id="timers"><p class="no-timers">No active timers</p></div>
+  </div>
+
+  <!-- Event buttons -->
+  <div class="card">
+    <h2>Inject event</h2>
+    <div class="btn-grid">
+      <button class="primary" onclick="send('USB_INSERTED')">USB inserted</button>
+      <button onclick="send('USB_REMOVED')">USB removed</button>
+      <button onclick="send('TIMEOUT', {timer:'planting'})">Timeout — planting</button>
+      <button onclick="send('TIMEOUT', {timer:'spike'})">Timeout — spike</button>
+      <button onclick="send('TIMEOUT', {timer:'defusing'})">Timeout — defusing</button>
+      <button onclick="send('TIMEOUT', {timer:'main'})">Timeout — main</button>
+      <button class="danger" onclick="send('RESET')" style="grid-column:1/-1">Reset</button>
+    </div>
+    <div class="custom-row">
+      <input id="customEvt" placeholder='e.g. TIMEOUT' />
+      <button onclick="sendCustom()">Send</button>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <h2>Event log</h2>
+    <div id="log"></div>
+  </div>
+
+</div>
+
+<script>
+const BASE = 'http://localhost:8000';
+const WS   = 'ws://localhost:8000/ws';
+
+let ws;
+const timers = {};
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+
+function connect() {
+  ws = new WebSocket(WS);
+
+  ws.onopen = () => {
+    setConn(true);
+    log('Connected to backend', 'evt');
+    pollStatus();
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.event === 'STATE_CHANGED') {
+        setStateBadge(msg.state);
+        log(`State → ${msg.state}`, 'state');
+        pollStatus();
+      }
+    } catch(_) {}
+  };
+
+  ws.onclose = () => {
+    setConn(false);
+    log('WebSocket disconnected — retrying in 3s…', 'error');
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => {
+    setConn(false);
+  };
+}
+
+// ── HTTP helpers ───────────────────────────────────────────────────────────
+
+async function send(type, data) {
+  try {
+    const body = { type };
+    if (data) body.data = data;
+    const r = await fetch(`${BASE}/event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    log(`Sent ${type}`, 'evt');
+    pollStatus();
+  } catch(e) {
+    log(`Failed to send ${type}: ${e.message}`, 'error');
+  }
+}
+
+function sendCustom() {
+  const val = document.getElementById('customEvt').value.trim().toUpperCase();
+  if (!val) return;
+  send(val);
+  document.getElementById('customEvt').value = '';
+}
+
+async function pollStatus() {
+  try {
+    const r = await fetch(`${BASE}/status`);
+    const j = await r.json();
+    setStateBadge(j.state);
+    renderTimers(j.active_timers || []);
+  } catch(e) {}
+}
+
+// ── UI helpers ─────────────────────────────────────────────────────────────
+
+function setStateBadge(state) {
+  const el = document.getElementById('stateBadge');
+  el.textContent = state || '—';
+  el.className = `state-badge state-${state || 'UNKNOWN'}`;
+}
+
+function setConn(ok) {
+  document.getElementById('wsDot').className = `conn-dot ${ok ? 'connected' : 'disconnected'}`;
+  document.getElementById('wsLabel').textContent = ok
+    ? 'Connected to ws://localhost:8000/ws'
+    : 'Disconnected — retrying…';
+}
+
+function renderTimers(active) {
+  const el = document.getElementById('timers');
+  if (!active.length) {
+    el.innerHTML = '<p class="no-timers">No active timers</p>';
+    Object.keys(timers).forEach(k => { clearInterval(timers[k].iv); delete timers[k]; });
+    return;
+  }
+  active.forEach(name => {
+    if (!timers[name]) {
+      timers[name] = { secs: durationFor(name), iv: null };
+      timers[name].iv = setInterval(() => {
+        if (timers[name]) {
+          timers[name].secs = Math.max(0, timers[name].secs - 1);
+          updateTimerEl(name);
+        }
+      }, 1000);
+    }
+  });
+  Object.keys(timers).forEach(name => {
+    if (!active.includes(name)) {
+      clearInterval(timers[name].iv);
+      delete timers[name];
+    }
+  });
+  el.innerHTML = active.map(n => `
+    <div class="timer-row">
+      <span class="timer-name">${n}</span>
+      <span class="timer-val${timers[n] && timers[n].secs <= 10 ? ' urgent' : ''}" id="t-${n}">
+        ${timers[n] ? fmt(timers[n].secs) : '—'}
+      </span>
+    </div>`).join('');
+}
+
+function updateTimerEl(name) {
+  const el = document.getElementById(`t-${name}`);
+  if (el && timers[name]) {
+    el.textContent = fmt(timers[name].secs);
+    el.className = `timer-val${timers[name].secs <= 10 ? ' urgent' : ''}`;
+  }
+}
+
+function durationFor(name) {
+  return { main: 600, planting: 60, spike: 120, defusing: 60 }[name] || 60;
+}
+
+function fmt(s) {
+  const m = Math.floor(s / 60), sec = s % 60;
+  return `${m}:${String(sec).padStart(2,'0')}`;
+}
+
+function log(msg, type) {
+  const el = document.getElementById('log');
+  const now = new Date().toLocaleTimeString();
+  const cls = type === 'error' ? 'log-entry error' : 'log-entry';
+  const inner = type === 'evt'
+    ? `<span class="time">${now}</span><span class="evt">${msg}</span>`
+    : type === 'state'
+    ? `<span class="time">${now}</span><span class="state">${msg}</span>`
+    : `<span class="time">${now}</span>${msg}`;
+  el.innerHTML = `<div class="${cls}">${inner}</div>` + el.innerHTML;
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+connect();
+setInterval(pollStatus, 5000);
+</script>
+</body>
+</html>
