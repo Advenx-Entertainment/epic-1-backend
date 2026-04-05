@@ -1,0 +1,88 @@
+CO SYSTEM — SETUP
+=================
+
+REQUIREMENTS
+------------
+Python 3.8+
+pip
+
+
+INSTALL
+-------
+cd WebSocket/backend
+pip install fastapi "uvicorn[standard]" websockets
+
+
+RUN
+---
+Terminal 1 — Backend:
+cd WebSocket/backend
+uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+
+Terminal 2 — Frontend:
+cd WebSocket/frontend
+python -m http.server 3000
+
+Browser:
+http://localhost:3000
+
+
+DEVICE CLIENT (Raspberry Pi / PC)
+----------------------------------
+1. Open device_client.py
+2. Set DEVICE_ID to a unique name
+3. Set SERVER_URL — replace localhost with server IP if on another machine
+4. pip install websockets
+5. python device_client.py
+
+
+CONNECTING ARENA DEVICES
+-------------------------
+All devices must be on the same network (Wi-Fi or LAN).
+
+1. Find the IP of the machine running the server:
+   Windows:   ipconfig        (look for IPv4 Address)
+   Mac/Linux: ifconfig        (look for inet under your network adapter)
+   Example:   192.168.1.10
+
+2. On each arena device open device_client.py and set:
+   DEVICE_ID  = "unique-name-per-device"     e.g. rpi-laser-01, pc-node-02
+   SERVER_URL = "ws://192.168.1.10:8000/ws/rpi-laser-01"
+                          ^
+                          replace with your actual server IP
+
+3. pip install websockets
+
+4. python device_client.py
+
+5. Each device will appear in the browser log when connected.
+
+To send a command to one specific device:
+   {"type":"command","action":"laser_trip","target":"rpi-laser-01"}
+
+To send to all devices:
+   {"type":"command","action":"laser_trip","target":"all"}
+
+NOTE: Port 8000 must be open on the server machine.
+   Windows:  Windows Defender Firewall > Inbound Rules > New Rule > Port 8000
+   Linux:    sudo ufw allow 8000
+
+
+FIND YOUR SERVER IP
+-------------------
+Windows:   ipconfig
+Mac/Linux: ifconfig
+
+
+STOP
+----
+Ctrl + C in each terminal
+
+
+COMMON ERRORS
+-------------
+pip not found              → use pip3
+port 8000 in use           → change to --port 8080 and update index.html
+status disconnected        → open via http://localhost:3000, not by double-clicking the file
+device cant reach server   → replace localhost with server IP in device_client.py
+device still cant connect  → check firewall, allow port 8000
