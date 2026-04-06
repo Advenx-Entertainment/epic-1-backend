@@ -1,120 +1,144 @@
-import asyncio
-import json
-import os
-from typing import Any, Dict, Set
-
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
-from auth import create_access_token, require_jwt, verify_token
-from mqtt_client import mqtt_status, start_mqtt, stop_mqtt
+from dotenv import load_dotenv
+import json
+import time
+import asyncio
 
 load_dotenv()
 
-app = FastAPI(title="Pi <-> Backend <-> PC")
+app = FastAPI(title="Game Ready Backend")
 
-# Allow PC clients to connect from browser UIs
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-class ConnectionManager:
-    def __init__(self) -> None:
-        self._connections: Set[WebSocket] = set()
-
-    async def connect(self, websocket: WebSocket) -> None:
-        await websocket.accept()
-        self._connections.add(websocket)
-
-    def disconnect(self, websocket: WebSocket) -> None:
-        self._connections.discard(websocket)
-
-    async def broadcast(self, message: Dict[str, Any]) -> None:
-        if not self._connections:
-            return
-        payload = json.dumps(message)
-        dead: Set[WebSocket] = set()
-        for ws in self._connections:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            self.disconnect(ws)
+# ── Shared state ──────────────────────────────────────────────
+ready_teams: set[str] = set()
+connected_clients: list[WebSocket] = []
 
 
-manager = ConnectionManager()
+# ── broadcast() — Person 2 implementation ────────────────────
+async def broadcast(payload: dict):
+    """Send a JSON payload to every connected WebSocket client."""
+    message = json.dumps(payload, default=str)
+    disconnected = []
+    for ws in connected_clients:
+        try:
+            await ws.send_text(message)
+        except Exception:
+            disconnected.append(ws)
+    for ws in disconnected:
+        if ws in connected_clients:
+            connected_clients.remove(ws)
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+# ── Person 1: REST endpoints ──────────────────────────────────
+
+@app.get("/health")
+async def health():
+    """Server liveness check."""
+    return {"status": "ok"}
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
-    loop = asyncio.get_running_loop()
+@app.get("/api/status")
+async def status():
+    """How many teams are currently ready."""
+    return {
+        "ready_count": len(ready_teams),
+        "ready_teams": list(ready_teams),
+        "waiting_for": max(0, 2 - len(ready_teams)),
+    }
 
-    async def handle_event(event: Dict[str, Any]) -> None:
-        await manager.broadcast(event)
-
-    start_mqtt(loop=loop, on_event=handle_event)
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    stop_mqtt()
-
-
-@app.post("/api/token")
-async def issue_token(payload: LoginRequest) -> Dict[str, Any]:
-    user = os.getenv("AUTH_USER", "admin")
-    pwd = os.getenv("AUTH_PASS", "admin")
-    if payload.username != user or payload.password != pwd:
-        return {"ok": False, "error": "invalid_credentials"}
-    token = create_access_token(subject=payload.username)
-    return {"ok": True, "access_token": token, "token_type": "bearer"}
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
-    token = websocket.query_params.get("token")
-    if not token:
-        await websocket.close(code=4401)
-        return
-    try:
-        verify_token(token)
-    except Exception:
-        await websocket.close(code=4401)
-        return
-
-    await manager.connect(websocket)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                parsed = json.loads(data)
-                event = parsed if isinstance(parsed, dict) else {"type": "pc:message", "data": parsed}
-            except json.JSONDecodeError:
-                event = {"type": "pc:message", "data": data}
-            await manager.broadcast(event)
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-
-
-@app.get("/api/mqtt/status")
-async def api_mqtt_status() -> Dict[str, Any]:
-    return mqtt_status()
 
 @app.post("/api/ready")
-async def api_ready(_: Dict[str, Any] = Depends(require_jwt)) -> Dict[str, Any]:
-    event = {"type": "game:start"}
-    await manager.broadcast(event)
-    return {"ok": True, "broadcast": event}
+async def team_ready(team_id: str):
+    """
+    Mark a team as ready.
+    Increments counter — when both teams ready, broadcasts game:start.
+    """
+    ready_teams.add(team_id)
+    current_count = len(ready_teams)
+
+    if current_count >= 2:
+        await broadcast({
+            "type": "game:start",
+            "message": "Both teams ready — game is starting!",
+            "teams": list(ready_teams),
+            "timestamp": time.time(),
+        })
+        return {
+            "status": "game_started",
+            "ready_count": current_count,
+            "teams": list(ready_teams),
+        }
+
+    return {
+        "status": "waiting",
+        "ready_count": current_count,
+        "waiting_for": 2 - current_count,
+        "message": f"{current_count}/2 teams ready",
+    }
+
+
+@app.post("/api/reset")
+async def reset():
+    """Reset ready state for a new round."""
+    ready_teams.clear()
+    await broadcast({"type": "game:reset", "message": "Game has been reset"})
+    return {"status": "reset", "message": "Ready state cleared"}
+
+
+# ── Person 2: WebSocket endpoint ──────────────────────────────
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    """
+    Persistent WebSocket connection.
+    Handles ping/pong for latency measurement.
+    Receives game:start broadcast when both teams ready.
+    """
+    await ws.accept()
+    connected_clients.append(ws)
+    try:
+        while True:
+            data = await ws.receive_text()
+            msg = json.loads(data)
+
+            # Latency ping/pong — echo ts back immediately
+            if msg.get("type") == "ping":
+                await ws.send_text(json.dumps({
+                    "type": "pong",
+                    "ts": msg["ts"],
+                    "server_ts": time.time() * 1000,
+                }))
+
+    except WebSocketDisconnect:
+        if ws in connected_clients:
+            connected_clients.remove(ws)
+
+
+# ── Person 2: extra status endpoints ─────────────────────────
+
+@app.get("/person2/health")
+async def person2_health():
+    """Person 2 health check."""
+    return {"health": "ok"}
+
+
+@app.get("/person2/status")
+async def person2_status():
+    """Person 2 status — shows connected WS client count."""
+    return {
+        "status": "running",
+        "connected_clients": len(connected_clients),
+    }
+
+
+@app.get("/person2/ready")
+async def person2_ready():
+    """Person 2 ready check."""
+    return {"status": "person2 ready"}
